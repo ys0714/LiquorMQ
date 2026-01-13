@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package liquormq;
+
+option java_multiple_files = true;
+option java_package = "org.liquor.liquormq.grpc";
+option java_outer_classname = "RaftProto";
+
+service RaftService {
+  // RequestVote RPC: 由候选人(Candidate)调用以收集选票
+  rpc RequestVote(VoteRequest) returns (VoteResponse);
+
+  // AppendEntries RPC: 由领导者(Leader)调用以复制日志条目；也用作心跳机制
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+}
+
+message LogEntry {
+  int64 term = 1;
+  int64 index = 2;
+  bytes command = 3;  // 实际的状态机命令 (例如：序列化的 MQ 消息)
+}
+
+message VoteRequest {
+  int64 term = 1;         // 候选人的任期
+  int32 candidateId = 2;  // 请求选票的候选人 ID
+  int64 lastLogIndex = 3; // 候选人最后一条日志条目的索引
+  int64 lastLogTerm = 4;  // 候选人最后一条日志条目的任期
+}
+
+message VoteResponse {
+  int64 term = 1;         // 当前任期 (CurrentTerm)，用于候选人更新自己的任期
+  bool voteGranted = 2;   // True 表示候选人获得了选票
+}
+
+message AppendEntriesRequest {
+  int64 term = 1;            // 领导者的任期
+  int32 leaderId = 2;        // 领导者 ID，以便跟随者可以将客户端重定向到领导者
+  int64 prevLogIndex = 3;    // 新日志条目紧前方的日志索引 (用于一致性检查)
+  int64 prevLogTerm = 4;     // prevLogIndex 处日志条目的任期
+  repeated LogEntry entries = 5; // 需要存储的日志条目 (心跳时为空)
+  int64 leaderCommit = 6;    // 领导者的已知已提交索引 (commitIndex)
+}
+
+message AppendEntriesResponse {
+  int64 term = 1;        // 当前任期 (CurrentTerm)，用于领导者更新自己的任期
+  bool success = 2;      // 如果跟随者包含与 prevLogIndex 和 prevLogTerm 匹配的条目，则为 True
+}
