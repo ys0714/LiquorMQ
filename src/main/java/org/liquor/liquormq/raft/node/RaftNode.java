@@ -8,6 +8,8 @@ import org.liquor.liquormq.raft.enums.RaftState;
 import org.liquor.liquormq.raft.storage.RaftLog;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.context.event.EventListener;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -81,8 +84,17 @@ public class RaftNode {
              }
         }
 
-        resetElectionTimeout();
-        log.info("RaftNode 已启动，ID: {}", myId);
+        // 移除 init 中的 resetElectionTimeout，防止在 Spring 容器启动过程中（端口未打开前）触发选举
+        // resetElectionTimeout();
+        log.info("RaftNode 初始化完成，等待应用启动...");
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public synchronized void start() {
+        log.info("应用完全启动 (Ports Bound)，RaftNode 开始运行...");
+        // 第一次启动给予极大的超时范围 (3000ms - 5000ms)，确保有足够时间建立连接并收到现有 Leader 的心跳
+        // 这不是违反 Raft，而是为了适应发生物理网络连接建立延迟时的工程优化
+        resetElectionTimeout(6.0);
     }
 
     // 持久化 currentTerm 和 votedFor
@@ -100,23 +112,28 @@ public class RaftNode {
 
     // 处理来自候选人的投票请求
     public synchronized VoteResponse handleRequestVote(VoteRequest request) {
-        log.debug("收到来自候选人 {} 的投票请求", request.getCandidateId());
+        log.debug("收到来自候选人 {} 的投票请求 (Term: {})", request.getCandidateId(), request.getTerm());
 
         boolean voteGranted = false;
         long term = currentTerm.get();
+        long requestTerm = request.getTerm();
 
         // 1. 如果请求的任期小于当前任期，拒绝投票
-        if (request.getTerm() > term) {
-            currentTerm.set(request.getTerm());
-            votedFor.set(-1);
-            persistMetadata();
-            becomeFollower(request.getTerm());
+        if (requestTerm < term) {
+            return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build();
         }
 
-        // 2. 如果请求的任期等于当前任期，并且 (未投票 || 已经投给了该候选人)，
-        // 并且候选人的日志至少和自己一样新，则投票
-        if (request.getTerm() == currentTerm.get() &&
-            (votedFor.get() == -1 || votedFor.get() == request.getCandidateId()) &&
+        // 如果请求的任期大于当前任期，更新自己的任期并转为 Follower
+        if (requestTerm > term) {
+            currentTerm.set(requestTerm);
+            votedFor.set(-1);
+            persistMetadata();
+            becomeFollower(requestTerm);
+            // 注意：这里成为 Follower 后，代码继续向下执行，评估是否给这个新任期的候选人投票
+        }
+
+        // 2. 如果 (未投票 || 已经投给了该候选人)，并且候选人的日志至少和自己一样新，则投票
+        if ((votedFor.get() == -1 || votedFor.get() == request.getCandidateId()) &&
             isLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm())) {
 
             voteGranted = true;
@@ -410,25 +427,22 @@ public class RaftNode {
     }
 
     private void resetElectionTimeout() {
+        resetElectionTimeout(1.0);
+    }
+
+    private void resetElectionTimeout(double factor) {
         if (electionTimeoutTask != null && !electionTimeoutTask.isDone()) {
             electionTimeoutTask.cancel(false);
         }
-        long min = raftProperties.getElectionTimeoutMin();
-        long max = raftProperties.getElectionTimeoutMax();
+        long min = (long) (raftProperties.getElectionTimeoutMin() * factor);
+        long max = (long) (raftProperties.getElectionTimeoutMax() * factor);
         long delay = min + (long) (Math.random() * (max - min));
+
         electionTimeoutTask = scheduler.schedule(this::startElection, delay, TimeUnit.MILLISECONDS);
     }
 
-    // 检查候选人的日志是否至少和自己一样新
-    private boolean isLogUpToDate(long lastLogIndex, long lastLogTerm) {
-        long myLastLogIndex = getLastLogIndex();
-        long myLastLogTerm = getLastLogTerm();
 
-        if (lastLogTerm != myLastLogTerm) {
-            return lastLogTerm > myLastLogTerm;
-        }
-        return lastLogIndex >= myLastLogIndex;
-    }
+
 
     private long getLastLogIndex() {
         return raftLog.getLastLogIndex();
@@ -436,6 +450,17 @@ public class RaftNode {
 
     private long getLastLogTerm() {
         return raftLog.getLastLogTerm();
+    }
+
+    // 检查候选人的日志是否至少和自己的一样新
+    private boolean isLogUpToDate(long candidateLastLogIndex, long candidateLastLogTerm) {
+        long myLastLogTerm = getLastLogTerm();
+        long myLastLogIndex = getLastLogIndex();
+
+        if (candidateLastLogTerm != myLastLogTerm) {
+            return candidateLastLogTerm > myLastLogTerm;
+        }
+        return candidateLastLogIndex >= myLastLogIndex;
     }
 
     // 将已提交的日志条目应用到状态机
@@ -471,5 +496,40 @@ public class RaftNode {
         log.info("Leader 提议命令，索引 {}: {}", index, command);
         // 复制将在下一次心跳时发送给跟随者
         return true;
+    }
+
+    /**
+     * 获取节点当前状态快照
+     */
+    public RaftNodeStatus getNodeStatus() {
+        long lastIdx = getLastLogIndex();
+        long lastTerm = getLastLogTerm();
+
+        // 获取最近的10条日志用于展示
+        long startShowIndex = Math.max(1, lastIdx - 10 + 1);
+        List<org.liquor.liquormq.grpc.LogEntry> recentEntries = raftLog.getEntriesFrom(startShowIndex);
+
+        List<RaftNodeStatus.LogEntryInfo> simplifiedLogs = recentEntries.stream()
+                .map(e -> RaftNodeStatus.LogEntryInfo.builder()
+                        .index(e.getIndex())
+                        .term(e.getTerm())
+                        .command(e.getCommand().toStringUtf8())
+                        .build())
+                .collect(Collectors.toList());
+
+        return RaftNodeStatus.builder()
+                .nodeId(myId)
+                .state(state)
+                .currentTerm(currentTerm.get())
+                .votedFor(votedFor.get())
+                .commitIndex(commitIndex)
+                .lastApplied(lastApplied)
+                .lastLogIndex(lastIdx)
+                .lastLogTerm(lastTerm)
+                .nextIndices(state == RaftState.LEADER ? new java.util.HashMap<>(nextIndex) : null)
+                .matchIndices(state == RaftState.LEADER ? new java.util.HashMap<>(matchIndex) : null)
+                .logSize((int)lastIdx) // 假设 index 连续且从1开始，则大小约等于 lastIndex
+                .recentLogEntries(simplifiedLogs)
+                .build();
     }
 }

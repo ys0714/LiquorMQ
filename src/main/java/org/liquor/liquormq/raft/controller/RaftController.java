@@ -1,8 +1,10 @@
 package org.liquor.liquormq.raft.controller;
 
 import org.liquor.liquormq.raft.node.RaftNode;
+import org.liquor.liquormq.raft.node.RaftNodeStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -24,5 +26,9 @@ public class RaftController {
             return ResponseEntity.status(503).body("Not leader or system busy");
         }
     }
-}
 
+    @GetMapping("/status")
+    public ResponseEntity<RaftNodeStatus> getStatus() {
+        return ResponseEntity.ok(raftNode.getNodeStatus());
+    }
+}
