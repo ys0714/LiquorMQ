@@ -1,4 +1,4 @@
-package org.liquor.liquormq.raft;
+package org.liquor.liquormq.raft.statemachine;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

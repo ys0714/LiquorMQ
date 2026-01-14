@@ -1,5 +1,6 @@
-package org.liquor.liquormq.raft;
+package org.liquor.liquormq.raft.controller;
 
+import org.liquor.liquormq.raft.node.RaftNode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;

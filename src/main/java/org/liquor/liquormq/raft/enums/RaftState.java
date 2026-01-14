@@ -1,4 +1,4 @@
-package org.liquor.liquormq.raft;
+package org.liquor.liquormq.raft.enums;
 
 public enum RaftState {
     FOLLOWER,

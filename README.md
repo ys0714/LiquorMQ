@@ -1,57 +1,67 @@
-# LiquorMQ 架构设计
+# LiquorMQ 架构设计与开发指南
 
-## 概览
-LiquorMQ 是一个基于 Raft 共识算法的分布式高可用消息队列系统，支持多节点集群部署。系统通过 gRPC 实现节点间通信及客户端交互。
+## 项目概览
+LiquorMQ 是一个基于 Raft 共识算法的分布式高可用消息队列系统，目前处于原型开发阶段。系统旨在通过 gRPC 实现节点间的高效通信，并保证集群的数据强一致性。
 
-## 核心组件
+## 核心功能与状态
 
-### 1. Broker (代理)
-Broker 是系统的核心服务器组件，负责处理客户端的消息生产和消费请求。
-- **角色**: Follower（跟随者）, Candidate（候选人）, Leader（领导者）。
-- **功能**:
-  - 接收客户端的生产/消费请求。
-  - 通过 Raft 协议维护集群一致性。
-  - 管理消息存储和分发。
+### 已实现功能
+1.  **Leader 选举 (Leader Election)**:
+    - 节点实现了 Follower、Candidate、Leader 状态机转换。
+    - 支持 RequestVote RPC 处理及投票逻辑。
+    - 具备随机化的选举超时机制以避免选票瓜分。
+2.  **心跳机制 (Heartbeat)**:
+    - Leader 节点定期向 Followers 发送 AppendEntries RPC（心跳）。
+    - 节点间能够维持连接并感知 Leader 存活状态。
+    - **注**: 已添加日志输出以显式观察心跳交互。
+
+### 待完善功能
+1.  **日志复制 (Log Replication)**:
+    - 当前 AppendEntries 实现了基础框架，但日志同步的完整逻辑（如 `nextIndex`, `matchIndex` 的动态更新及日志冲突解决）尚待完善。
+    - 消息的持久化存储目前使用 `InMemoryRaftLog`（内存存储），需对接磁盘存储。
+2.  **状态机应用 (State Machine Application)**:
+    - 消息应用到业务状态机的流程依赖于日志复制的提交索引更新，需同步完善。
+
+## 系统架构
+
+### 1. Broker (代理节点)
+系统的核心服务节点，集成了 Raft 共识模块与消息处理模块。
+- **端口配置**:
+    - Web 服务端口: `8080`, `8081`, `8082`
+    - gRPC 通信端口: `9090`, `9091`, `9092`
 
 ### 2. Raft 共识层
-Raft 层负责实现分布式一致性，确保日志复制和选主过程的正确性。
-- **RaftNode**: Raft 算法的核心实现，管理节点状态（角色、任期、投票等）。
-- **LogModule**: 负责日志的持久化存储和检索。
-- **ConsensusModule**: 实现选主和日志复制逻辑，处理 RequestVote 和 AppendEntries RPC。
-- **StateMachine**: 状态机模块，将已提交的日志应用到业务逻辑（如消息存储）。
+- **RaftNode**: `org.liquor.liquormq.raft.node.RaftNode`
+    - 核心控制器，负责状态流转、定时器管理（选举/心跳）。
+- **RaftLog**: `org.liquor.liquormq.raft.storage.RaftLog`
+    - 日志接口，目前实现为 `InMemoryRaftLog`。
+- **StateMachine**: 状态机接口，用于处理已提交的日志命令。
 
-### 3. 网络通信层 (gRPC)
-- **RaftService**: gRPC 服务端实现，接收其他节点的 RPC 请求。
-- **RaftClient**: gRPC 客户端封装，用于向其他节点发送 RPC 请求。
+### 3. 通信层 (gRPC)
+基于 Protobuf 定义 (`raft.proto`) 生成服务代码。
+- **RaftService**: 处理收到的 RPC 请求 (`requestVote`, `appendEntries`)。
+- **RaftPeer**: 封装对其他节点的 gRPC 客户端调用。
 
-### 4. 存储层
-- **MessageStore**: 消息存储模块，负责持久化消息数据，支持 KV 存储或文件系统。
+## 开发与测试
+
+### 常见问题与修复
+- **Maven 编译失败**:
+    - 之前可能遇到 `javax.annotation.Generated` 找不到符号的问题。
+    - **修复**: 已更新 `pom.xml` 将 Spring Boot 版本升级至 `3.2.1` 并完善了 Lombok 配置，确保依赖正确解析。
+- **心跳不可见**:
+    - 之前控制台无心跳日志。
+    - **修复**: 已在 `RaftNode.java` 中添加 `INFO` 级别的日志输出，分别记录发送和接收心跳的事件。
+
+### 如何启动与测试
+1.  **简易启动 (Windows)**:
+    - 根目录下提供了 `start-cluster.bat` 脚本。
+    - 双击即可一键启动 3 个 CMD 窗口，分别运行 3 个 Broker 实例。
+    - 这是比手动 `java -jar` 更简便的方式。
+2.  **IDEA 开发调试**:
+    - 请参考 `TESTING.md` 中的 "选项 2" 配置 IDEA 的 Compound Run Configuration，可在一个界面管理 3 个节点。
 
 ## 技术栈
 - **语言**: Java 17
-- **框架**: Spring Boot
-- **RPC 框架**: gRPC + Protobuf
-- **构建工具**: Maven
-
-## 实现细节
-
-### 依赖配置 (pom.xml)
-- 添加 `net.devh:grpc-server-spring-boot-starter` 依赖，用于 gRPC 服务端集成。
-- 添加标准的 gRPC 和 Protobuf 库。
-- 配置 `protobuf-maven-plugin` 插件，用于生成 gRPC 和 Protobuf 的 Java 类。
-
-### 协议定义 (src/main/proto/raft.proto)
-- 定义 `VoteRequest` 和 `VoteResponse`，用于 Leader 选举。
-- 定义 `AppendEntriesRequest` 和 `AppendEntriesResponse`，用于日志复制和心跳。
-- 定义 `LogEntry`，用于封装状态机命令。
-
-### Raft 核心组件
-- **RaftState**: 枚举类，定义 FOLLOWER, CANDIDATE, LEADER 三种状态。
-- **RaftPeer**: 封装 gRPC 客户端，用于与其他节点通信。
-- **RaftNode**: Raft 算法的核心实现，负责选主、日志复制、心跳维护等。
-- **RaftServiceImpl**: gRPC 服务端实现，处理传入的 RPC 请求并委托给 RaftNode。
-
-### 存储层
-- **LogModule**: 提供日志的追加、读取和持久化功能。
-- **MessageStore**: 负责消息的存储和检索，支持状态机应用。
-
+- **核心框架**: Spring Boot 3.2.1
+- **RPC**: gRPC 1.58.0 + Protobuf 3.24.0
+- **构建**: Maven

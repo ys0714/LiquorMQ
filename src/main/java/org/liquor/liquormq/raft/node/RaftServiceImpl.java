@@ -1,4 +1,4 @@
-package org.liquor.liquormq.raft;
+package org.liquor.liquormq.raft.node;
 
 import io.grpc.stub.StreamObserver;
 import net.devh.boot.grpc.server.service.GrpcService;
