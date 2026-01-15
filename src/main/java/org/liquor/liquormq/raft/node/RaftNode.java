@@ -58,6 +58,15 @@ public class RaftNode {
     // 对于每个服务器，已知的已经复制到该服务器的最高日志条目的索引 (初始为 0，单调递增)
     private final ConcurrentMap<Integer, Long> matchIndex = new ConcurrentHashMap<>();
 
+    // 领袖ID，客户端可用于重定向
+    private volatile int leaderId = -1;
+    // 上一次状态变更时间
+    private long lastStateChangeTime = System.currentTimeMillis();
+
+    public int getLeaderId() {
+        return leaderId;
+    }
+
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(4);
     // 选举超时任务
     private ScheduledFuture<?> electionTimeoutTask;
@@ -92,6 +101,7 @@ public class RaftNode {
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void start() {
         log.info("应用完全启动 (Ports Bound)，RaftNode 开始运行...");
+
         // 第一次启动给予极大的超时范围 (3000ms - 5000ms)，确保有足够时间建立连接并收到现有 Leader 的心跳
         // 这不是违反 Raft，而是为了适应发生物理网络连接建立延迟时的工程优化
         resetElectionTimeout(6.0);
@@ -159,14 +169,17 @@ public class RaftNode {
         }
 
         // 收到来自当前或更高任期领导者的请求，更新任期并转为跟随者
-        if (request.getTerm() >= term) {
-            if (request.getTerm() > term) {
-                currentTerm.set(request.getTerm());
-                votedFor.set(-1);
-                persistMetadata();
-            }
-            becomeFollower(request.getTerm());
-            // 如果需要，更新领导者 ID
+        if (request.getTerm() > term) {
+            log.info("收到 AppendEntries 任期 ({}) > 当前任期 ({})，更新任期并转为 Follower", request.getTerm(), term);
+            currentTerm.set(request.getTerm());
+            votedFor.set(-1);
+            persistMetadata();
+        }
+        becomeFollower(request.getTerm());
+        // 更新领导者 ID，以便客户端重定向
+        if (this.leaderId != request.getLeaderId()) {
+            log.info("设置 LeaderID: {}", request.getLeaderId());
+            this.leaderId = request.getLeaderId();
         }
 
         resetElectionTimeout(); // 收到有效的心跳/追加请求，重置选举计时器
@@ -200,6 +213,7 @@ public class RaftNode {
             if (existing != null) {
                 if (existing.getTerm() != entry.getTerm()) {
                     // 4. 发生冲突，删除现有条目及其之后的所有条目
+                    log.warn("发现日志冲突，截断本地日志。索引: {}, 现有任期: {}, 新任期: {}", index, existing.getTerm(), entry.getTerm());
                     raftLog.truncateFrom(index);
                     raftLog.append(entry);
                 }
@@ -225,7 +239,13 @@ public class RaftNode {
     // --- 内部逻辑 ---
 
     private void becomeFollower(long term) {
+        if (state != RaftState.FOLLOWER) {
+            long duration = System.currentTimeMillis() - lastStateChangeTime;
+            log.info("状态结束: {} (持续 {} ms) -> 状态开始: FOLLOWER. 任期: {}", state, duration, term);
+            lastStateChangeTime = System.currentTimeMillis();
+        }
         state = RaftState.FOLLOWER;
+        leaderId = -1; // 重置 Leader ID，直到收到有效的心跳
         // votedFor 不在这里重置。必须在任期增加时显式重置。
         if (heartbeatTask != null && !heartbeatTask.isCancelled()) {
             heartbeatTask.cancel(false);
@@ -236,8 +256,12 @@ public class RaftNode {
     private void becomeLeader() {
         if (state != RaftState.CANDIDATE) return;
 
-        log.info("当选为 LEADER，任期 {}", currentTerm.get());
+        long duration = System.currentTimeMillis() - lastStateChangeTime;
+        log.info("状态结束: {} (持续 {} ms) -> 状态开始: LEADER. 任期: {}", state, duration, currentTerm.get());
+        lastStateChangeTime = System.currentTimeMillis();
+
         state = RaftState.LEADER;
+        leaderId = myId;
 
         if (electionTimeoutTask != null) {
             electionTimeoutTask.cancel(false);
@@ -256,7 +280,10 @@ public class RaftNode {
     private synchronized void startElection() {
         if (state == RaftState.LEADER) return;
 
-        log.info("开始选举，针对任期 {}", currentTerm.get() + 1);
+        long duration = System.currentTimeMillis() - lastStateChangeTime;
+        log.info("状态结束: {} (持续 {} ms) -> 状态开始: CANDIDATE (开始选举). 新任期: {}", state, duration, currentTerm.get() + 1);
+        lastStateChangeTime = System.currentTimeMillis();
+
         state = RaftState.CANDIDATE;
         long newTerm = currentTerm.incrementAndGet();
         votedFor.set(myId);
@@ -438,6 +465,7 @@ public class RaftNode {
         long max = (long) (raftProperties.getElectionTimeoutMax() * factor);
         long delay = min + (long) (Math.random() * (max - min));
 
+        log.info("启动选举定时器: {} ms 后触发", delay);
         electionTimeoutTask = scheduler.schedule(this::startElection, delay, TimeUnit.MILLISECONDS);
     }
 

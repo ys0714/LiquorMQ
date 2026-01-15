@@ -22,6 +22,10 @@ public class RaftPeer {
                 .usePlaintext()
                 .build();
         this.stub = RaftServiceGrpc.newBlockingStub(channel);
+        // 激进连接策略：在对象创建时立即请求建立连接
+        // 这样在 Raft 算法正式启动前（Spring 启动过程），底层 TCP 连接有充分时间完成三次握手
+        // 避免了首次 RPC 调用因建立连接而超时，导致无谓的选举失败
+        this.channel.getState(true);
     }
 
     public int getId() {
@@ -42,6 +46,13 @@ public class RaftPeer {
 
     public void resetFailures() {
         consecutiveFailures.set(0);
+    }
+
+    /**
+     * 尝试建立连接（预热），避免首次 RPC 延迟过高导致选举超时
+     */
+    public void warmUp() {
+        channel.getState(true);
     }
 
     public void shutdown() {
