@@ -35,12 +35,8 @@ public abstract class AbstractState implements NodeState {
         if (requestTerm > term) {
             log.info("收到 RequestVote 任期 ({}) > 当前任期 ({})，更新任期并转为 Follower", requestTerm, term);
             node.updateTermAndConvert(requestTerm);
-            // 这里不直接返回，因为转为 Follower 后还需要处理这次投票请求
-            // 但由于状态模式的切换，通常我们会让新的状态对象接管或在这里完成通用部分。
-            // 简单起见，这里让当前的逻辑继续，因为 updateTermAndConvert 会切换状态对象，
-            // 但当前方法调用是基于旧对象的。这是一个典型的状态模式陷阱。
-            // 实际上，如果发生状态转换，当前处理应该中断或委托给新状态。
-            // 为了简化，我们假设 RaftNode 里的 currentTerm 已经更新。
+            // 状态已切换，应当委托给新状态处理请求，以确保逻辑的一致性
+            return node.handleRequestVote(request);
         }
 
         // 调用具体的投票判断逻辑 - 这部分逻辑在所有状态下其实是很通用的
@@ -65,9 +61,13 @@ public abstract class AbstractState implements NodeState {
         if (requestTerm > term) {
              log.info("收到 AppendEntries 任期 ({}) > 当前任期 ({})，更新任期并转为 Follower", requestTerm, term);
              node.updateTermAndConvert(requestTerm);
+             // 状态已切换，委托给新状态
+             return node.handleAppendEntries(request);
         } else if (getType() != RaftState.FOLLOWER) {
              // 同任期的 Leader 发来心跳，Candidate 应该转 Follower
              node.convert(RaftState.FOLLOWER);
+             // 状态已切换，委托给新状态
+             return node.handleAppendEntries(request);
         }
 
         // 更新 LeaderID，重置选举定时器等逻辑在 RaftNode 的通用方法或 Follower 状态中处理
@@ -85,13 +85,22 @@ public abstract class AbstractState implements NodeState {
         // 由于需要访问 votedFor 和 log，最好还是调用 node 的方法
 
         // 2. 如果 (未投票 || 已经投给了该候选人)，并且候选人的日志至少和自己一样新，则投票
-        if (node.canVoteFor(request.getCandidateId()) &&
-            node.isLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm())) {
+        boolean isLogUpToDate = node.isLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm());
+        if (node.canVoteFor(request.getCandidateId()) && isLogUpToDate) {
 
             voteGranted = true;
             node.voteFor(request.getCandidateId());
             node.resetElectionTimeout();
             log.info("投票给候选人 {}", request.getCandidateId());
+        } else {
+             if (!isLogUpToDate) {
+                 log.info("拒绝投票给候选人 {}: 它的日志不够新。MyLast(Term={}, Index={}), Candidate(Term={}, Index={})",
+                         request.getCandidateId(),
+                         node.getLastLogTerm(), node.getLastLogIndex(),
+                         request.getLastLogTerm(), request.getLastLogIndex());
+             } else {
+                 log.info("拒绝投票给候选人 {}: 已经投给了 {}", request.getCandidateId(), node.getRaftProperties().getNodeId()/*这里应该是 votedFor*/); // 简化日志，实际 votedFor 需要从 getter 取
+             }
         }
 
         return VoteResponse.newBuilder()
@@ -100,4 +109,3 @@ public abstract class AbstractState implements NodeState {
                 .build();
     }
 }
-

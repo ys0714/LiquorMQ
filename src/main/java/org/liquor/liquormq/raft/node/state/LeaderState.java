@@ -33,6 +33,10 @@ public class LeaderState extends AbstractState {
         // 初始化 Leader 特有的 nextIndex/matchIndex
         node.getLogReplicator().initLeaderState();
 
+        // 提交一个 No-Op 日志 (空命令) 以确立当前任期的日志权威性
+        // 这能防止那些没有任何日志的节点 (如刚重启且丢失内存日志) 凭借高任期抢夺 Leader
+        node.propose("");
+
         // 立即发送心跳
         startLeaderLoop();
     }
@@ -56,4 +60,3 @@ public class LeaderState extends AbstractState {
         }, 0, node.getRaftProperties().getHeartbeatInterval(), TimeUnit.MILLISECONDS);
     }
 }
-

@@ -81,9 +81,11 @@ public class CandidateState extends AbstractState {
              }
 
              int votes = votesReceived.incrementAndGet();
-             if (votes > (node.getPeers().size() + 1) / 2) {
+             int majority = (node.getPeers().size() + 1) / 2 + 1;
+             if (votes >= majority) {
                  synchronized (node) {
                      if (node.getCurrentTerm() == electionTerm && node.getState() == RaftState.CANDIDATE) {
+                         log.info("获得大多数选票 ({}/{}), 正在转换为 LEADER", votes, node.getPeers().size() + 1);
                          node.convert(RaftState.LEADER);
                      }
                  }
