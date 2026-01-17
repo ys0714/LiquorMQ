@@ -11,7 +11,7 @@ import java.util.List;
  * RaftLog 的简单内存实现。
  * 非持久化！仅用于测试/原型设计。
  */
-@Component
+// @Component
 public class InMemoryRaftLog implements RaftLog {
 
     // 索引 0 未使用，以便于基于 1 的索引，或者我们只是处理偏移量。

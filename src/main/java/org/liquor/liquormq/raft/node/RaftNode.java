@@ -9,6 +9,7 @@ import org.liquor.liquormq.raft.node.state.*;
 import org.liquor.liquormq.raft.statemachine.StateMachine;
 import org.liquor.liquormq.raft.storage.RaftLog;
 import org.liquor.liquormq.raft.storage.RaftMetaStorage;
+import org.liquor.liquormq.raft.observer.ClusterObserver;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -45,6 +46,8 @@ public class RaftNode {
     private RaftProperties raftProperties;
     @Autowired
     private RaftMetaStorage metaStorage;
+    @Autowired
+    private ClusterObserver clusterObserver;
 
     // --- 易变状态 ---
     @Getter
@@ -75,20 +78,15 @@ public class RaftNode {
         // 加载元数据
         org.liquor.liquormq.raft.storage.RaftMetadata meta = metaStorage.load();
 
-        // 修复：检测数据丢失
-        if (raftLog.getLastLogIndex() == 0 && meta.getCurrentTerm() > 0) {
-            log.warn("检测到日志数据丢失 (可能是 InMemoryLog 重启) 但存在旧任期 (Term={})。正在重置任期为 0...", meta.getCurrentTerm());
-            this.currentTerm.set(0);
-            this.votedFor.set(-1);
-            persistMetadata();
-        } else {
-            this.currentTerm.set(meta.getCurrentTerm());
-            this.votedFor.set(meta.getVotedFor());
-        }
+        // 由于已引入 FileBasedRaftLog，日志已持久化。
+        // 不再需要 "检测数据丢失" 的防御性重置逻辑。
+        // 如果文件确实丢失（手动删除）而 Meta 保留，Raft 协议也能通过一致性检查让该节点作为 Follower 自动追赶。
+        this.currentTerm.set(meta.getCurrentTerm());
+        this.votedFor.set(meta.getVotedFor());
 
         for (RaftProperties.PeerConfig peerConfig : raftProperties.getPeers()) {
              if (peerConfig.getId() != myId) {
-                 peers.add(new RaftPeer(peerConfig.getId(), peerConfig.getHost(), peerConfig.getPort()));
+                 peers.add(new RaftPeer(peerConfig.getId(), peerConfig.getHost(), peerConfig.getPort(), clusterObserver));
              }
         }
         log.info("RaftNode 初始化完成，等待应用启动...");
@@ -97,8 +95,8 @@ public class RaftNode {
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void start() {
         log.info("应用完全启动，RaftNode 开始运行...");
-        // 初始启动，使用 6倍因子
-        resetElectionTimeout(6.0);
+        // 初始启动，使用 12倍因子
+        resetElectionTimeout(12.0);
     }
 
     @PreDestroy
@@ -294,7 +292,7 @@ public class RaftNode {
         long max = (long) (raftProperties.getElectionTimeoutMax() * factor);
         long delay = min + (long) (Math.random() * (max - min));
 
-        log.info("启动选举定时器: {} ms 后触发", delay);
+        log.debug("启动选举定时器: {} ms 后触发", delay);
         // 注意：这里需要再次检查状态，避免在 Leader 状态下触发
         electionTimeoutTask = scheduler.schedule(() -> {
             synchronized (this) {
@@ -307,4 +305,3 @@ public class RaftNode {
         }, delay, TimeUnit.MILLISECONDS);
     }
 }
-

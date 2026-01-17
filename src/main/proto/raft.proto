@@ -25,7 +25,6 @@ message VoteRequest {
   int32 candidateId = 2;  // 请求选票的候选人 ID
   int64 lastLogIndex = 3; // 候选人最后一条日志条目的索引
   int64 lastLogTerm = 4;  // 候选人最后一条日志条目的任期
-  bool preVote = 5;       // 是否为预投票请求 (Pre-Vote)
 }
 
 message VoteResponse {

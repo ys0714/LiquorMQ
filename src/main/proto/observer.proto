@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package liquormq.observer;
+
+option java_multiple_files = true;
+option java_package = "org.liquor.liquormq.observer.grpc";
+option java_outer_classname = "ObserverProto";
+
+service ObserverService {
+  // 使用客户端流式 RPC 上报日志，减少连接开销
+  rpc Report(stream ClusterEvent) returns (ReportResponse);
+}
+
+message ClusterEvent {
+  int64 timestamp = 1;
+  int32 nodeId = 2;
+  string type = 3; // RECV_REQ, SEND_RESP, etc.
+  string method = 4;
+  string content = 5;
+}
+
+message ReportResponse {
+  bool success = 1;
+}
+
