@@ -177,6 +177,10 @@ public class RaftNode {
         return currentTerm.get();
     }
 
+    public int getVotedFor() {
+        return votedFor.get();
+    }
+
     public int getLeaderId() {
         return leaderId;
     }

@@ -8,7 +8,6 @@ import org.liquor.liquormq.raft.node.RaftNode;
 import org.liquor.liquormq.raft.node.RaftPeer;
 
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 public class CandidateState extends AbstractState {
@@ -39,7 +38,9 @@ public class CandidateState extends AbstractState {
 
         log.info("开始选举，针对任期 {}", newTerm);
 
-        AtomicInteger votesReceived = new AtomicInteger(1); // 初始化 1 票 (自己)
+        // 使用 Set 记录获得的选票来源（线程安全 Set）
+        java.util.Set<Integer> votesReceived = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+        votesReceived.add(node.getMyId()); // 加上自己的一票
 
         for (RaftPeer peer : node.getPeers()) {
             CompletableFuture.runAsync(() -> {
@@ -51,9 +52,11 @@ public class CandidateState extends AbstractState {
                             .setLastLogTerm(node.getLastLogTerm())
                             .build();
 
+                    log.info("向节点 {} 发送 RequestVote: Term={}, LastLogIndex={}, LastLogTerm={}", peer.getId(), newTerm, node.getLastLogIndex(), node.getLastLogTerm());
+
                     VoteResponse response = peer.getStub().requestVote(request);
 
-                    handleVoteResponse(response, newTerm, votesReceived);
+                    handleVoteResponse(response, newTerm, votesReceived, peer.getId());
                 } catch (Exception e) {
                     log.error("向节点 {} 请求投票失败: {}", peer.getId(), e.getMessage());
                 }
@@ -61,7 +64,9 @@ public class CandidateState extends AbstractState {
         }
     }
 
-    private void handleVoteResponse(VoteResponse response, long electionTerm, AtomicInteger votesReceived) {
+    private void handleVoteResponse(VoteResponse response, long electionTerm, java.util.Set<Integer> votesReceived, int peerId) {
+        log.info("收到节点 {} 的 VoteResponse: Term={}, VoteGranted={}", peerId, response.getTerm(), response.getVoteGranted());
+
         // 检查任期：如果发现更高任期，立即转 Follower
         if (response.getTerm() > electionTerm) {
             synchronized (node) { // 简单同步，实际需更细粒度
@@ -80,12 +85,16 @@ public class CandidateState extends AbstractState {
                  return;
              }
 
-             int votes = votesReceived.incrementAndGet();
+             votesReceived.add(peerId);
+             int votes = votesReceived.size();
              int majority = (node.getPeers().size() + 1) / 2 + 1;
+
              if (votes >= majority) {
                  synchronized (node) {
+                     // 再次检查状态，避免重复转换
                      if (node.getCurrentTerm() == electionTerm && node.getState() == RaftState.CANDIDATE) {
-                         log.info("获得大多数选票 ({}/{}), 正在转换为 LEADER", votes, node.getPeers().size() + 1);
+                         log.info("获得大多数选票 ({}/{}) 来源: {}, 正在转换为 LEADER",
+                                 votes, node.getPeers().size() + 1, votesReceived);
                          node.convert(RaftState.LEADER);
                      }
                  }

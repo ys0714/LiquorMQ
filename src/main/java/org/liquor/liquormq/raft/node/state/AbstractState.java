@@ -22,11 +22,16 @@ public abstract class AbstractState implements NodeState {
 
     @Override
     public VoteResponse handleRequestVote(VoteRequest request) {
+        log.info("收到 RequestVote 请求. Request(CandidateId={}, Term={}, LastLogIndex={}, LastLogTerm={}). CurrentState(MyId={}, Term={}, VotedFor={}, LastLogIndex={}, LastLogTerm={}, State={})",
+                request.getCandidateId(), request.getTerm(), request.getLastLogIndex(), request.getLastLogTerm(),
+                node.getMyId(), node.getCurrentTerm(), node.getVotedFor(), node.getLastLogIndex(), node.getLastLogTerm(), node.getState());
+
         long term = node.getCurrentTerm();
         long requestTerm = request.getTerm();
 
         // 1. 如果请求的任期小于当前任期，拒绝投票
         if (requestTerm < term) {
+            log.info("拒绝 RequestVote: 请求任期 {} 小于 当前任期 {}", requestTerm, term);
             return VoteResponse.newBuilder().setTerm(term).setVoteGranted(false).build();
         }
 
@@ -93,7 +98,7 @@ public abstract class AbstractState implements NodeState {
                     voteGranted = true;
                     node.voteFor(request.getCandidateId());
                     node.resetElectionTimeout();
-                    log.info("投票给候选人 {}", request.getCandidateId());
+                    log.info("{} 投票给候选人 {} 候选人Term= {}",request.getTerm(), node.getMyId(),request.getCandidateId());
                 } else {
                     // 如果在此期间已经被其他请求投票了，则不进行投票
                     voteGranted = false;
@@ -107,13 +112,18 @@ public abstract class AbstractState implements NodeState {
                          node.getLastLogTerm(), node.getLastLogIndex(),
                          request.getLastLogTerm(), request.getLastLogIndex());
              } else {
-                 log.info("拒绝投票给候选人 {}: 已经投给了 {}", request.getCandidateId(), node.getRaftProperties().getNodeId()/*这里应该是 votedFor*/); // 简化日志，实际 votedFor 需要从 getter 取
+                 log.info("拒绝投票给候选人 {}: 已经投给了 {}", request.getCandidateId(), node.getVotedFor());
              }
         }
 
-        return VoteResponse.newBuilder()
+        VoteResponse response = VoteResponse.newBuilder()
                 .setTerm(node.getCurrentTerm())
                 .setVoteGranted(voteGranted)
                 .build();
+
+        log.info("处理 RequestVote 完成. 返回 Response(Term={}, VoteGranted={}). FinalState(MyId={}, Term={}, VotedFor={})",
+                response.getTerm(), response.getVoteGranted(), node.getMyId(), node.getCurrentTerm(), node.getVotedFor());
+
+        return response;
     }
 }

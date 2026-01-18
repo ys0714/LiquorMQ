@@ -1,6 +1,5 @@
 package org.liquor.liquormq.raft.node;
 
-import com.google.protobuf.ByteString;
 import lombok.extern.slf4j.Slf4j;
 import org.liquor.liquormq.grpc.AppendEntriesRequest;
 import org.liquor.liquormq.grpc.AppendEntriesResponse;
@@ -90,7 +89,15 @@ public class LogReplicator {
                         .addAllEntries(entries)
                         .build();
 
+                if (!entries.isEmpty()) {
+                    log.info("向节点 {} 发送 AppendEntries: PrevIndex={}, PrevTerm={}, EntryCount={}", peer.getId(), prevLogIndex, prevLogTerm, entries.size());
+                }
+
                 AppendEntriesResponse response = peer.getStub().appendEntries(request);
+
+                if (!entries.isEmpty()) {
+                    log.info("收到节点 {} 对 AppendEntries 的响应: Success={}, Term={}, LastLogIndex={}", peer.getId(), response.getSuccess(), response.getTerm(), nextIdx + entries.size() - 1);
+                }
 
                 peer.resetFailures();
 
@@ -175,6 +182,8 @@ public class LogReplicator {
 
         if (entries.isEmpty()) {
             log.debug("收到来自领导者 {} 的心跳", request.getLeaderId());
+        } else {
+            log.info("收到来自领导者 {} 的日志追加请求: Count={}, PrevIndex={}, PrevTerm={}", request.getLeaderId(), entries.size(), request.getPrevLogIndex(), request.getPrevLogTerm());
         }
 
         for (LogEntry entry : entries) {

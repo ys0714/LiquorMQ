@@ -31,14 +31,49 @@ public class ObserverServiceImpl extends ObserverServiceGrpc.ObserverServiceImpl
             @Override
             public void onNext(ClusterEvent event) {
                 String timeStr = formatter.format(Instant.ofEpochMilli(event.getTimestamp()));
-                // 使用 String.format 进行格式化，确保对齐生效，且 content 能正确显示
-                String logMsg = String.format("[GLOBAL-LOG] %s | Node-%d | %-10s | %-15s | %s",
+
+                String method = event.getMethod();
+                String type = event.getType();
+                // 压缩多行 Protobuf 字符串为单行，方便日志聚合
+                String rawContent = event.getContent().replace('\n', ' ').replaceAll("\\s+", " ").trim();
+
+                String icon = "";
+                String summary = rawContent;
+
+                // 简单的日志增强处理，提取关键信息
+                if ("RequestVote".equals(method)) {
+                    icon = "🗳️";
+                    if (summary.contains("vote_granted: true")) {
+                        summary = wrapColor(summary, ANSI_GREEN);
+                    } else if (summary.contains("vote_granted: false")) {
+                        summary = wrapColor(summary, ANSI_RED);
+                    }
+                } else if ("AppendEntries".equals(method)) {
+                    icon = "🪵";
+                    // 尝试提取 entries 数量 (简单的字符串包含判断，精确解析需要反序列化)
+                    if (rawContent.contains("entries {")) {
+                         summary = wrapColor(summary, ANSI_BLUE);
+                    }
+                }
+
+                String logMsg = String.format("[GLOBAL-LOG] %s | Node-%d | %-10s | %s %-15s | %s",
                         timeStr,
                         event.getNodeId(),
-                        event.getType(),
-                        event.getMethod(),
-                        event.getContent());
+                        type,
+                        icon,
+                        method,
+                        summary);
                 log.info(logMsg);
+            }
+
+            // ANSI 颜色代码，用于控制台高亮
+            private static final String ANSI_RESET = "\u001B[0m";
+            private static final String ANSI_RED = "\u001B[31m";
+            private static final String ANSI_GREEN = "\u001B[32m";
+            private static final String ANSI_BLUE = "\u001B[34m";
+
+            private String wrapColor(String text, String color) {
+                return color + text + ANSI_RESET;
             }
 
             @Override
