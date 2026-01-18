@@ -116,7 +116,7 @@ public class RaftNode {
         return nodeState.handleAppendEntries(request);
     }
 
-    public boolean propose(String command) {
+    public synchronized boolean propose(String command) {
         if (nodeState.getType() != RaftState.LEADER) {
             return false;
         }
@@ -240,7 +240,7 @@ public class RaftNode {
     }
 
     // 辅助方法：更新任期并转为 Follower
-    public void updateTermAndConvert(long newTerm) {
+    public synchronized void updateTermAndConvert(long newTerm) {
         currentTerm.set(newTerm);
         votedFor.set(-1);
         persistMetadata();
@@ -279,12 +279,12 @@ public class RaftNode {
         }
     }
 
-    public void resetElectionTimeout() {
+    public synchronized void resetElectionTimeout() {
         resetElectionTimeout(1.0);
     }
 
     // 暴露给状态使用 (Start/Reset)
-    public void resetElectionTimeout(double factor) {
+    public synchronized void resetElectionTimeout(double factor) {
         if (electionTimeoutTask != null && !electionTimeoutTask.isDone()) {
             electionTimeoutTask.cancel(false);
         }

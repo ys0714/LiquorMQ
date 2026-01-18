@@ -87,11 +87,19 @@ public abstract class AbstractState implements NodeState {
         // 2. 如果 (未投票 || 已经投给了该候选人)，并且候选人的日志至少和自己一样新，则投票
         boolean isLogUpToDate = node.isLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm());
         if (node.canVoteFor(request.getCandidateId()) && isLogUpToDate) {
-
-            voteGranted = true;
-            node.voteFor(request.getCandidateId());
-            node.resetElectionTimeout();
-            log.info("投票给候选人 {}", request.getCandidateId());
+            synchronized (node) {
+                // 在同步块中再次检查是否可以投票，防止并发情况下的重复投票
+                if (node.canVoteFor(request.getCandidateId())) {
+                    voteGranted = true;
+                    node.voteFor(request.getCandidateId());
+                    node.resetElectionTimeout();
+                    log.info("投票给候选人 {}", request.getCandidateId());
+                } else {
+                    // 如果在此期间已经被其他请求投票了，则不进行投票
+                    voteGranted = false;
+                    log.info("并发情况下已被其他候选人投票，拒绝候选人 {} 的投票请求", request.getCandidateId());
+                }
+            }
         } else {
              if (!isLogUpToDate) {
                  log.info("拒绝投票给候选人 {}: 它的日志不够新。MyLast(Term={}, Index={}), Candidate(Term={}, Index={})",

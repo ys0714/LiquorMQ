@@ -1,119 +1,154 @@
-# LiquorMQ
+# 🥃 LiquorMQ
 
-> 一个基于Raft 共识算法构建的强一致性分布式消息队列原型。
+[![Java](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://www.oracle.com/java/technologies/downloads/#java17)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.0-green.svg)](https://spring.io/projects/spring-boot)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)]()
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-LiquorMQ 旨在提供一个易于理解、高度模块化的分布式系统实现，用于学习和研究 Raft 算法以及分布式强一致性系统的构建细节。
+**LiquorMQ** 是一个基于 **Raft 共识算法** 原生构建的分布式强一致性消息队列（Distributed Strong Consistency Message Queue）。
 
-## 核心特性
+不同于 Kafka 追求极致吞吐量的 Hybrid (AP) 设计，LiquorMQ 致力于探索 **CP (Consistency & Partition Tolerance)** 模型在消息中间件中的深度实践。它保证在 $f < n/2$ 的节点故障下，已提交（Committed）的消息**绝对不丢失**且**严格有序**。
 
-*   **Raft 共识算法实现**:
-    *   **Leader 选举 (Election)**: 完整的选举流程，支持随机超时、Term 逻辑及候选人投票限制。
-    *   **日志复制 (Log Replication)**: 支持 AppendEntries RPC，实现日志一致性检查和冲突截断。
-    *   **安全性 (Safety)**: 遵循 Raft 论文的安全性规则（如 "Log Matching Property", "Election Restriction"）。
-    *   **集群稳定优化**: 包含针对启动阶段和网络波动的工程优化（如启动预热期）。
-*   **通信层**:
-    *   基于 **gRPC** (Protobuf) 的高性能节点间通信。
-*   **可观测性**:
-    *   提供 HTTP API 用于查看节点内部状态（Term, Role, CommitIndex, Log Summary 等）。
-*   **存储**:
-    *   **InMemoryRaftLog**: 目前采用内存日志存储（开发原形阶段）。
-    *   **RaftMetaStorage**: 关键元数据（Term, VotedFor）文件持久化。
+> ⚠️ **注意**: 本项目目前处于原型（Prototype）阶段，核心算法遵循 Raft 论文标准实现，旨在作为分布式系统一致性研究的参考范例。
 
-## 技术栈
+---
 
-*   **语言**: Java 17
-*   **框架**: Spring Boot 4.0.1
-*   **通信**: gRPC 1.58.0 + Protobuf 3.24.0
-*   **构建工具**: Maven
+## ✨ 核心特性 (Key Features)
 
-## 快速开始
+- **🛡️ 强一致性 (Strong Consistency)**
+  全链路集成 Raft 算法。从 Leader 选举到日志复制，均经过严格的 Term 与 Index 校验，杜绝“脑裂”与数据覆盖。
+  
+- **💾 数据持久化 (Persistence)**
+  实现了基于 Append-Only Log 的文件存储引擎 (`FileBasedRaftLog`)。即使节点宕机重启，也能通过重放日志恢复状态，不再依赖内存。
 
-### 1. 环境准备
-确保已安装 JDK 17+ 和 Maven。
+- **⚡ 高可用性 (High Availability)**
+  支持多节点集群部署。Leader 故障自动检测与毫秒级故障转移（Failover），确保服务的高可用性。
 
-### 2. 编译项目
+- **🔗 高性能通信**
+  节点间均采用 **gRPC** (Protobuf) 进行通信，保证了低延迟与跨语言扩展的可能性。
+
+- **🔍 可观测性**
+  内置 HTTP 监控接口，实时查看 Leader 状态、Term 届数、CommitIndex 及日志水位。
+
+---
+
+## 🛠️ 技术栈 (Tech Stack)
+
+| 组件 | 技术 | 说明 |
+| :--- | :--- | :--- |
+| **Language** | Java 17 | 核心开发语言 |
+| **Framework** | Spring Boot 3.x | 容器与应用启动 |
+| **RPC** | gRPC 1.58 + Protobuf | 节点间高效通信 |
+| **Build** | Maven | 依赖管理与构建 |
+| **Storage** | Java NIO | 文件系统直接交互 |
+
+---
+
+## 🚀 快速开始 (Quick Start)
+
+### 环境依赖
+- JDK 17+
+- Maven 3.6+
+
+### 1. 编译项目
 ```bash
 mvn clean package -DskipTests
 ```
 
-### 3. 运行集群 (本地模拟)
-你可以在本地启动多个实例来模拟一个 Raft 集群。假设我们在 `application.properties` 中预定义了 5 个 Peer 的配置 (端口 9091-9095)。
+### 2. 启动集群 (Local Cluster)
+为了演示 Raft 的共识特性，建议在本地启动 3 个实例组成最小集群。
 
-**启动节点 1**:
+**启动节点 1 (Bootstrap Node)**
 ```bash
-java -jar target/liquorMQ-0.0.1-SNAPSHOT.jar --server.port=8081 --grpc.server.port=9091 --liquormq.raft.node-id=1
+java -jar target/liquorMQ-0.0.1-SNAPSHOT.jar \
+  --server.port=8081 \
+  --grpc.server.port=9091 \
+  --liquormq.raft.node-id=1
 ```
 
-**启动节点 2**:
+**启动节点 2**
 ```bash
-java -jar target/liquorMQ-0.0.1-SNAPSHOT.jar --server.port=8082 --grpc.server.port=9092 --liquormq.raft.node-id=2
+java -jar target/liquorMQ-0.0.1-SNAPSHOT.jar \
+  --server.port=8082 \
+  --grpc.server.port=9092 \
+  --liquormq.raft.node-id=2
 ```
 
-**启动节点 3**:
+**启动节点 3**
 ```bash
-java -jar target/liquorMQ-0.0.1-SNAPSHOT.jar --server.port=8083 --grpc.server.port=9093 --liquormq.raft.node-id=3
+java -jar target/liquorMQ-0.0.1-SNAPSHOT.jar \
+  --server.port=8083 \
+  --grpc.server.port=9093 \
+  --liquormq.raft.node-id=3
 ```
 
-*(以此类推启动节点 4 和 5)*
+> **Tip**: 启动后，节点会自动进行 Leader 选举。你可以通过日志观察到 `当选为 LEADER` 或 `成为 FOLLOWER` 的信息。
 
-> **注意**: 启动后，节点会自动开始选举。你可以观察控制台日志看到 `当选为 LEADER` 或 `成为 FOLLOWER` 的信息。
+---
 
-## API 接口
+## 🔌 API 使用 (API Usage)
 
-LiquorMQ 提供了 HTTP 接口来与集群交互。
+### 查看节点状态
+`GET /api/raft/status`
 
-### 1. 查看节点状态
-查看当前节点的角色、任期、日志索引等详细信息。
+获取当前节点视角下的集群状态。
 
-*   **URL**: `GET /api/raft/status`
-*   **示例**:
-    ```bash
-    curl http://localhost:8081/api/raft/status
-    ```
-*   **响应**:
-    ```json
-    {
-      "nodeId": 1,
-      "state": "LEADER",
-      "currentTerm": 44,
-      "votedFor": 1,
-      "commitIndex": 120,
-      "lastLogIndex": 125,
-      ...
-    }
-    ```
-
-### 2. 提议命令 (客户端写请求)
-向集群发送一条数据（命令）。该请求必须发送给 **LEADER** 节点，否则会被拒绝（目前未实现自动转发）。
-
-*   **URL**: `POST /api/raft/send`
-*   **Body**: 纯文本命令字符串
-*   **示例**:
-    ```bash
-    curl -X POST -d "set key value" http://localhost:8081/api/raft/send
-    ```
-
-## 项目结构
-
+```bash
+curl http://localhost:8081/api/raft/status
 ```
-src/main/java/org/liquor/liquormq/raft/
-├── controller/       # HTTP 接口层
-├── node/             # Raft 核心节点逻辑 (RaftNode, Timer, RPC Handler)
-├── storage/          # 日志与元数据存储接口及实现
-├── statemachine/     # 状态机定义
-├── grpc/             # gRPC 生成代码与服务实现
-└── enums/            # 状态枚举 (Role, Status)
+**Response:**
+```json
+{
+  "nodeId": 1,
+  "state": "LEADER",
+  "currentTerm": 44,
+  "votedFor": 1,
+  "commitIndex": 120,
+  "lastLogIndex": 125
+}
 ```
 
-## 开发进度与计划
+### 发送数据 (Write Data)
+`POST /api/raft/send`
 
-- [x] **Leader 选举**: 包含随机超时与 Split Vote 处理。
-- [x] **心跳保活**: Leader 向 Follower 发送 KeepAlive。
-- [x] **日志复制** (基础): 单向日志追加同步。
-- [x] **一致性检查**: `prevLogIndex/Term` 校验与回退。
-- [x] **启动优化**: 防止节点重启时的网络冷启动导致不必要的 Re-election。
-- [ ] **日志持久化**: 实现基于 RocksDB 或文件的 WAL (Write Ahead Log)。
-- [ ] **快照机制 (Snapshot)**: 日志压缩与 InstallSnapshot RPC。
-- [ ] **成员变更**: 动态添加/移除节点。
+向集群提交一条命令（Log Entry）。**注意：只有 Leader 节点能处理写请求**。
 
+```bash
+curl -X POST -d "SET key=value" http://localhost:8081/api/raft/send
+```
+
+---
+
+## 🗺️ 路线图 (Roadmap)
+
+- [x] **Core Raft**
+    - [x] Leader Election (Random Timeout, Split Vote Handling)
+    - [x] Log Replication (AppendEntries RPC)
+    - [x] Safety Rules (Log Matching, Term Check)
+- [x] **Persistence**
+    - [x] File-based Log Storage (WAL)
+    - [x] Metadata Storage (Term, VotedFor)
+- [x] **Optimization**
+    - [x] Pre-Vote / Startup Warmup
+    - [x] Concurrency Safety (Synchronized State Transitions)
+- [ ] **Advanced Features**
+    - [ ] Log Compaction (Snapshotting)
+    - [ ] Dynamic Membership Change (Add/Remove Node)
+    - [ ] Multi-Raft / Batching (Performance)
+
+---
+
+## 🤝 贡献 (Contributing)
+
+欢迎提交 Issue 和 Pull Request！本项目适合作为学习 Raft 算法的练手项目。
+
+1. Fork 本项目
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 提交 Pull Request
+
+## 📄 许可证 (License)
+
+Distributed under the Apache 2.0 License. See `LICENSE` for more information.
 

@@ -94,26 +94,29 @@ public class LogReplicator {
 
                 peer.resetFailures();
 
-                if (response.getTerm() > term) {
-                    synchronized (node) {
-                        if (response.getTerm() > node.getCurrentTerm()) {
-                             node.updateTermAndConvert(response.getTerm());
-                        }
+                synchronized (node) {
+                    // 关键检查：如果回调回来时，节点已经不是当前任期的 Leader，则忽略响应
+                    if (node.getCurrentTerm() != term || node.getState() != RaftState.LEADER) {
+                        return;
                     }
-                    return;
-                }
 
-                if (response.getSuccess()) {
-                    if (!entries.isEmpty()) {
-                        long lastEntryIndex = entries.get(entries.size() - 1).getIndex();
-                        nextIndex.put(peer.getId(), lastEntryIndex + 1);
-                        matchIndex.put(peer.getId(), lastEntryIndex);
-                        updateCommitIndex();
+                    if (response.getTerm() > term) {
+                        node.updateTermAndConvert(response.getTerm());
+                        return;
                     }
-                } else {
-                    // 复制失败（一致性检查失败），回退 nextIndex 并重试
-                    long newNextIndex = Math.max(1, nextIdx - 1);
-                    nextIndex.put(peer.getId(), newNextIndex);
+
+                    if (response.getSuccess()) {
+                        if (!entries.isEmpty()) {
+                            long lastEntryIndex = entries.get(entries.size() - 1).getIndex();
+                            nextIndex.put(peer.getId(), lastEntryIndex + 1);
+                            matchIndex.put(peer.getId(), lastEntryIndex);
+                            updateCommitIndex();
+                        }
+                    } else {
+                        // 复制失败（一致性检查失败），回退 nextIndex 并重试
+                        long newNextIndex = Math.max(1, nextIdx - 1);
+                        nextIndex.put(peer.getId(), newNextIndex);
+                    }
                 }
 
             } catch (Exception e) {
